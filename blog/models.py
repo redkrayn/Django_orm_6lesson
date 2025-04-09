@@ -1,7 +1,7 @@
 from django.db import models
 from django.urls import reverse
 from django.contrib.auth.models import User
-from django.db.models import Count
+from django.db.models import Count, Prefetch
 
 
 class TagQuerySet(models.QuerySet):
@@ -21,25 +21,26 @@ class PostQuerySet(models.QuerySet):
         popular_posts = self.annotate(likes_count=Count('likes')).order_by('-likes_count')
         return popular_posts
 
+    def with_prefetched_tags(self):
+        return self.prefetch_related(Prefetch('tags', queryset=Tag.objects.order_by('title')))
+
     def fetch_with_comments_count(self):
-        most_popular_posts = self
-        most_popular_posts_ids = [post.id for post in most_popular_posts]
         posts_with_comments = (
             self.model.objects
-            .filter(id__in=most_popular_posts_ids)
+            .filter(id__in=self.values_list('id', flat=True))
             .annotate(comments_count=Count('comments'))
             .prefetch_related('author')
         )
-        ids_and_comments = posts_with_comments.values_list('id', 'comments_count')
-        count_for_id = dict(ids_and_comments)
+        comments_count_dict = {post.id: post.comments_count for post in posts_with_comments}
 
         for post in self:
-            post.comments_count = count_for_id[post.id]
+            post.comments_count = comments_count_dict.get(post.id, 0)
+
         return posts_with_comments
 
 
 class Post(models.Model):
-    objects = PostQuerySet.as_manager()
+
     title = models.CharField('Заголовок', max_length=200)
     text = models.TextField('Текст')
     slug = models.SlugField('Название в виде url', max_length=200)
@@ -60,6 +61,7 @@ class Post(models.Model):
         'Tag',
         related_name='posts',
         verbose_name='Теги')
+    objects = PostQuerySet.as_manager()
 
     def __str__(self):
         return self.title
@@ -74,8 +76,8 @@ class Post(models.Model):
 
 
 class Tag(models.Model):
-    objects = TagQuerySet.as_manager()
     title = models.CharField('Тег', max_length=20, unique=True)
+    objects = TagQuerySet.as_manager()
 
     def __str__(self):
         return self.title
